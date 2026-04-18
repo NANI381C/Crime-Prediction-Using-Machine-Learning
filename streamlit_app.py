@@ -156,7 +156,7 @@ with tabs[0]:
         # ---------------------------------------------
         # FIX: Load City Mapping (Encoded → Name)
         # ---------------------------------------------
-        city_map_path = os.path.join(ROOT_DIR, "city_mapping.csv")
+        city_map_path = os.path.join(ROOT_DIR, "models", "city_mapping.csv")
 
 
         city_col = None
