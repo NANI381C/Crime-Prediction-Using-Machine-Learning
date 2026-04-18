@@ -17,7 +17,7 @@ from folium.plugins import TimestampedGeoJson
 # ---------------------------------------------
 from data_prep import load_and_preprocess
 from model_lstm import train_and_forecast
-from hotspot_cluster import generate_hotspot_map
+from hotspot_cluster import generate_hotspot_map, generate_risk_map
 from shap_explainer import explain_lstm_with_shap
 from classifier_model import train_classifier
 from visuals_map import build_city_geo_df, create_timestamped_geojson
@@ -365,6 +365,21 @@ with tabs[1]:
                         st.subheader("Top 10 Crime Hotspots")
                         st.bar_chart(top_cities)
                         st.write(top_cities.reset_index().rename(columns={city_label: "City", "Crime_Count": "Total Crimes"}))
+
+        if st.button("🚨 Generate Live Crime Risk Map"):
+            with st.spinner("Generating live risk map..."):
+                risk_map = generate_risk_map(df_monthly, encoders)
+                if risk_map is None:
+                    st.error("Unable to generate live risk map. No valid city locations found.")
+                else:
+                    risk_map.save("risk_map.html")
+                    st.iframe("risk_map.html", height=620)
+                    st.markdown(
+                        "### Risk Level Guide\n\n"
+                        "🟢 Low Risk  \n"
+                        "🟠 Medium Risk  \n"
+                        "🔴 High Risk"
+                    )
 
     st.markdown("</div>", unsafe_allow_html=True)
 

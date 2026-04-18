@@ -92,3 +92,65 @@ def generate_hotspot_map(df_monthly, encoders, n_clusters=5):
             popup=popup_html
         ).add_to(marker_cluster)
     return m
+
+
+def calculate_risk(crime_count):
+    if crime_count < 50:
+        return "Low"
+    elif crime_count < 150:
+        return "Medium"
+    else:
+        return "High"
+
+
+def generate_risk_map(df_monthly, encoders):
+    df_mean = df_monthly.groupby('City_enc')['Crime_Count'].mean().reset_index()
+    le = encoders.get('City', None)
+    if le is not None:
+        df_mean['City'] = le.inverse_transform(df_mean['City_enc'].astype(int))
+    else:
+        df_mean['City'] = df_mean['City_enc'].astype(str)
+
+    geolocator = Nominatim(user_agent="crime_risk_app", timeout=10)
+    lats, lons = [], []
+    for city in df_mean['City']:
+        lat, lon = None, None
+        try:
+            loc = geolocator.geocode(f"{city}, India")
+            if loc:
+                lat, lon = loc.latitude, loc.longitude
+        except Exception:
+            pass
+
+        if lat is None and city in FALLBACK_COORDS:
+            lat, lon = FALLBACK_COORDS[city]
+
+        lats.append(lat)
+        lons.append(lon)
+        time.sleep(0.1)
+
+    df_mean['lat'] = lats
+    df_mean['lon'] = lons
+    df_mean['Risk_Level'] = df_mean['Crime_Count'].apply(calculate_risk)
+    df_mean = df_mean.dropna(subset=['lat', 'lon'])
+
+    if df_mean.empty:
+        return None
+
+    m = folium.Map(location=[20.5937,78.9629], zoom_start=5, tiles='CartoDB dark_matter')
+    risk_colors = {"High": "red", "Medium": "orange", "Low": "green"}
+
+    for _, r in df_mean.iterrows():
+        color = risk_colors.get(r['Risk_Level'], 'gray')
+        popup_html = f"<b>{r['City']}</b><br>Risk: {r['Risk_Level']}<br>Avg Crimes: {r['Crime_Count']:.1f}"
+        folium.CircleMarker(
+            location=[r['lat'], r['lon']],
+            radius=10,
+            color=color,
+            fill=True,
+            fill_color=color,
+            fill_opacity=0.8,
+            popup=popup_html
+        ).add_to(m)
+
+    return m
