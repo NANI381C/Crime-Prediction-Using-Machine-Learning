@@ -256,8 +256,8 @@ with tabs[0]:
                 os.makedirs("models", exist_ok=True)
                 try:
                     model.save("models/crime_lstm_model.keras")
-                except:
-                    model.save("models/crime_lstm_model.h5")
+                except Exception:
+                    joblib.dump(model, "models/crime_lstm_model.joblib")
 
                 joblib.dump(scaler_X, "models/scaler_X.joblib")
                 joblib.dump(scaler_y, "models/scaler_y.joblib")

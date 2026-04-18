@@ -1,4 +1,4 @@
-# src/model_lstm.py
+# model_lstm.py
 
 import numpy as np
 import pandas as pd
@@ -7,15 +7,7 @@ import joblib
 
 from sklearn.preprocessing import MinMaxScaler
 from sklearn.metrics import mean_squared_error, mean_absolute_error
-
-from tensorflow import keras
-from tensorflow.keras import layers
-from tensorflow.keras.layers import (
-    LSTM,
-    Dense,
-    Dropout,
-    Bidirectional
-)
+from xgboost import XGBRegressor
 
 # Helper: create sliding window sequences
 def create_sequences(X, y, window):
@@ -45,6 +37,9 @@ def train_and_forecast(df_city, window=3, epochs=60, forecast_steps=1):
 
     data = df_city[features].astype(float).values
 
+    if len(data) <= window + 1:
+        raise ValueError("Not enough data to train the forecasting model.")
+
     # --------------------------
     # TIME-BASED SPLIT
     # --------------------------
@@ -52,7 +47,6 @@ def train_and_forecast(df_city, window=3, epochs=60, forecast_steps=1):
     train_len = len(data) - test_size
 
     train_data = data[:train_len]
-    test_data = data[train_len:]
 
     # --------------------------
     # SCALERS
@@ -60,13 +54,12 @@ def train_and_forecast(df_city, window=3, epochs=60, forecast_steps=1):
     scaler_X = MinMaxScaler()
     scaler_y = MinMaxScaler()
 
-    X_all = data
     y_all = data[:, 0].reshape(-1, 1)  # Crime_Count
 
     scaler_X.fit(train_data)
     scaler_y.fit(train_data[:, 0].reshape(-1, 1))
 
-    X_scaled = scaler_X.transform(X_all)
+    X_scaled = scaler_X.transform(data)
     y_scaled = scaler_y.transform(y_all)
 
     # --------------------------
@@ -75,34 +68,31 @@ def train_and_forecast(df_city, window=3, epochs=60, forecast_steps=1):
     X_seq, y_seq = create_sequences(X_scaled, y_scaled, window)
 
     split_idx = max(0, train_len - window)
-
     X_train, X_test = X_seq[:split_idx], X_seq[split_idx:]
     y_train, y_test = y_seq[:split_idx], y_seq[split_idx:]
+
+    if len(X_train) == 0 or len(X_test) == 0:
+        raise ValueError("Not enough sequence data to train the model.")
 
     # --------------------------
     # MODEL
     # --------------------------
-    model = keras.Sequential([
-        Bidirectional(LSTM(128, return_sequences=True), input_shape=(window, X_train.shape[2])),
-        Dropout(0.2),
+    model = XGBRegressor(
+        objective="reg:squarederror",
+        n_estimators=100,
+        max_depth=6,
+        learning_rate=0.1,
+        random_state=42,
+        verbosity=0
+    )
 
-        Bidirectional(LSTM(64)),
-        Dropout(0.2),
-
-        Dense(32, activation="relu"),
-        Dense(1)
-    ])
-
-    model.compile(optimizer="adam", loss="mse")
-
-    # TRAIN
-    model.fit(X_train, y_train, epochs=epochs, batch_size=8, verbose=1)
+    model.fit(X_train.reshape(X_train.shape[0], -1), y_train.ravel())
 
     # --------------------------
     # PREDICT TEST
     # --------------------------
-    pred_scaled = model.predict(X_test)
-    pred = scaler_y.inverse_transform(pred_scaled).flatten()
+    pred_scaled = model.predict(X_test.reshape(X_test.shape[0], -1))
+    pred = scaler_y.inverse_transform(pred_scaled.reshape(-1, 1)).flatten()
     y_true = scaler_y.inverse_transform(y_test).flatten()
 
     # --------------------------
@@ -127,17 +117,14 @@ def train_and_forecast(df_city, window=3, epochs=60, forecast_steps=1):
     seq = X_scaled[-window:].copy()
 
     for _ in range(forecast_steps):
-        input_seq = seq.reshape(1, window, X_scaled.shape[1])
-
-        pred_scaled = model.predict(input_seq)[0][0]
+        input_seq = seq.reshape(1, window * X_scaled.shape[1])
+        pred_scaled = model.predict(input_seq)[0]
         pred_inv = scaler_y.inverse_transform([[pred_scaled]])[0][0]
 
         next_forecasts.append(pred_inv)
 
-        # Build next feature vector based on predicted crime count
         next_row = seq[-1].copy()
-        next_row[0] = pred_scaled  # update Crime_Count scaled
-
+        next_row[0] = pred_scaled
         seq = np.vstack([seq[1:], next_row])
 
     return model, scaler_X, scaler_y, metrics, next_forecasts
