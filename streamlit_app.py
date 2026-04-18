@@ -285,17 +285,21 @@ with tabs[1]:
 
                 m = generate_hotspot_map(df_monthly, encoders)
 
-                # Optional: Replace tiles with Google Maps
-                if use_google_maps and GOOGLE_API_KEY:
-                    m = folium.Map(
-                        location=[20.5937, 78.9629],
-                        zoom_start=5,
-                        tiles=f"https://mt1.google.com/vt/lyrs=m&x={{x}}&y={{y}}&z={{z}}&key={GOOGLE_API_KEY}",
-                        attr="Google"
-                    )
+                if m is None:
+                    st.error("Unable to generate hotspot map. No valid location data found.")
+                else:
+                    # Optional: Replace tiles with Google Maps
+                    if use_google_maps and GOOGLE_API_KEY:
+                        # Add Google Maps as an additional tile layer
+                        folium.TileLayer(
+                            tiles=f"https://mt1.google.com/vt/lyrs=m&x={{x}}&y={{y}}&z={{z}}&key={GOOGLE_API_KEY}",
+                            attr="Google",
+                            name="Google Maps"
+                        ).add_to(m)
+                        m.add_child(folium.LayerControl())
 
-                m.save("map.html")
-                html(open("map.html").read(), height=600)
+                    m.save("map.html")
+                    html(open("map.html").read(), height=600)
 
     st.markdown("</div>", unsafe_allow_html=True)
 
