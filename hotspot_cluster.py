@@ -1,6 +1,7 @@
 # src/hotspot_cluster.py
 from sklearn.cluster import KMeans
 import folium
+from folium.plugins import HeatMap, MarkerCluster
 from geopy.geocoders import Nominatim
 import time
 
@@ -72,14 +73,22 @@ def generate_hotspot_map(df_monthly, encoders, n_clusters=5):
     df_mean['cluster'] = kmeans.fit_predict(df_mean[['Crime_Count']])
 
     m = folium.Map(location=[20.5937,78.9629], zoom_start=5, tiles='CartoDB dark_matter')
+
+    heat_data = df_mean[['lat', 'lon']].values.tolist()
+    HeatMap(heat_data, radius=25, blur=15, min_opacity=0.4).add_to(m)
+
+    marker_cluster = MarkerCluster(name='City Clusters').add_to(m)
     colors = ['red','orange','yellow','green','blue','purple','cadetblue']
 
     for _, r in df_mean.iterrows():
+        popup_html = f"<b>{r['City']}</b><br>Avg Crimes: {r['Crime_Count']:.1f}"
         folium.CircleMarker(
             location=[r['lat'], r['lon']],
-            radius=6 + (r['Crime_Count'] / (df_mean['Crime_Count'].max()+1))*6,
-            color=colors[int(r['cluster'])%len(colors)],
+            radius=6 + (r['Crime_Count'] / (df_mean['Crime_Count'].max() + 1)) * 6,
+            color=colors[int(r['cluster']) % len(colors)],
             fill=True,
-            popup=f"{r['City']}: Avg {r['Crime_Count']:.1f}"
-        ).add_to(m)
+            fill_color=colors[int(r['cluster']) % len(colors)],
+            fill_opacity=0.7,
+            popup=popup_html
+        ).add_to(marker_cluster)
     return m

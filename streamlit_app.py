@@ -9,6 +9,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 import joblib
 import folium
+import plotly.express as px
 from folium.plugins import TimestampedGeoJson
 
 # ---------------------------------------------
@@ -245,17 +246,66 @@ with tabs[0]:
                 c3.metric("RMSE", f"{metrics['rmse']:.2f}")
                 c4.metric("MAE", f"{metrics['mae']:.2f}")
 
-                # Plot
-                fig, ax = plt.subplots(figsize=(9, 4))
-                ax.plot(metrics["test_true"], label="Actual", linewidth=2)
-                ax.plot(metrics["test_pred"], label="Predicted", linewidth=2)
-                ax.legend()
-                st.pyplot(fig)
+                # Recent performance chart
+                actual_df = pd.DataFrame({
+                    "Date": df_city["Date"].iloc[-len(metrics["test_true"]):].reset_index(drop=True),
+                    "Actual": metrics["test_true"],
+                    "Predicted": metrics["test_pred"]
+                })
+                fig_history = px.line(
+                    actual_df,
+                    x="Date",
+                    y=["Actual", "Predicted"],
+                    title="Recent Actual vs Predicted",
+                    labels={"value": "Crime Count", "variable": "Series"}
+                )
+                fig_history.update_layout(template="plotly_dark")
+                st.plotly_chart(fig_history, use_container_width=True)
 
-                # Forecast
+                # Forecast chart
                 st.subheader("🔮 Future Forecast")
-                for i, p in enumerate(future_preds):
-                    st.write(f"Month +{i+1}: **{int(round(p))}** crimes")
+                last_date = df_city["Date"].max() if "Date" in df_city.columns else None
+                if last_date is not None and not pd.isna(last_date):
+                    future_dates = [last_date + pd.DateOffset(months=i+1) for i in range(len(future_preds))]
+                else:
+                    future_dates = [f"Month +{i+1}" for i in range(len(future_preds))]
+
+                forecast_df = pd.DataFrame({
+                    "Period": future_dates,
+                    "Predicted_Crimes": [float(p) for p in future_preds]
+                })
+
+                fig_forecast = px.area(
+                    forecast_df,
+                    x="Period",
+                    y="Predicted_Crimes",
+                    title="Crime Forecast Trend",
+                    markers=True
+                )
+                fig_forecast.update_layout(
+                    xaxis_title="Period",
+                    yaxis_title="Predicted Crime Count",
+                    template="plotly_dark"
+                )
+                st.plotly_chart(fig_forecast, use_container_width=True)
+
+                avg_pred = forecast_df["Predicted_Crimes"].mean()
+                max_row = forecast_df.loc[forecast_df["Predicted_Crimes"].idxmax()]
+                max_period = max_row["Period"]
+                max_period_str = max_period.strftime("%b %Y") if isinstance(max_period, pd.Timestamp) else str(max_period)
+                trend = "increasing" if forecast_df["Predicted_Crimes"].iloc[-1] > forecast_df["Predicted_Crimes"].iloc[0] else "decreasing"
+
+                st.subheader("🧠 AI Insights")
+                st.info(
+                    f"🔎 AI Analysis\n\n"
+                    f"• Average predicted crimes: {avg_pred:.1f}\n"
+                    f"• Highest crime expected in: {max_period_str}\n"
+                    f"• Trend: {trend.title()}\n\n"
+                    "Recommendation: Increase surveillance during high-risk months."
+                )
+
+                st.markdown("#### Forecast Details")
+                st.dataframe(forecast_df)
 
                 # Save model
                 os.makedirs("models", exist_ok=True)
@@ -289,7 +339,6 @@ with tabs[1]:
                 else:
                     # Optional: Replace tiles with Google Maps
                     if use_google_maps and GOOGLE_API_KEY:
-                        # Add Google Maps as an additional tile layer
                         folium.TileLayer(
                             tiles=f"https://mt1.google.com/vt/lyrs=m&x={{x}}&y={{y}}&z={{z}}&key={GOOGLE_API_KEY}",
                             attr="Google",
@@ -298,7 +347,24 @@ with tabs[1]:
                         m.add_child(folium.LayerControl())
 
                     m.save("map.html")
-                    st.iframe("map.html", height=600)
+
+                    city_label = None
+                    for col in ["CityName", "City", "city", "CITY", "City_enc"]:
+                        if col in df_monthly.columns:
+                            city_label = col
+                            break
+                    if city_label is None:
+                        city_label = "City_enc"
+
+                    top_cities = df_monthly.groupby(city_label)["Crime_Count"].sum().sort_values(ascending=False).head(10)
+
+                    map_col, rank_col = st.columns([2, 1])
+                    with map_col:
+                        st.iframe("map.html", height=620)
+                    with rank_col:
+                        st.subheader("Top 10 Crime Hotspots")
+                        st.bar_chart(top_cities)
+                        st.write(top_cities.reset_index().rename(columns={city_label: "City", "Crime_Count": "Total Crimes"}))
 
     st.markdown("</div>", unsafe_allow_html=True)
 
