@@ -10,7 +10,132 @@ import matplotlib.pyplot as plt
 import joblib
 import folium
 import plotly.express as px
+import plotly.graph_objects as go
 from folium.plugins import TimestampedGeoJson
+from sklearn.ensemble import RandomForestRegressor
+from sklearn.preprocessing import LabelEncoder
+
+DEFAULT_NCRB_URL = "https://data.gov.in/sites/default/files/crime_data.csv"
+
+# ---------------------------------------------
+# NCRB DATA LOADER
+# ---------------------------------------------
+
+def load_ncrb_data(url: str = DEFAULT_NCRB_URL):
+    df = pd.read_csv(url, encoding="utf-8", low_memory=False)
+    df.columns = df.columns.str.strip()
+
+    rename_map = {
+        "STATE/UT": "State",
+        "State/UT": "State",
+        "STATE": "State",
+        "STATE NAME": "State",
+        "DISTRICT": "District",
+        "DISTRICT/UT": "District",
+        "YEAR": "Year",
+        "Year": "Year",
+        "TOTAL IPC CRIMES": "Crime_Count",
+        "Total IPC Crimes": "Crime_Count",
+        "CRIME_COUNT": "Crime_Count",
+        "CRIME COUNT": "Crime_Count"
+    }
+    df = df.rename(columns=rename_map)
+
+    if "State" not in df.columns or "Year" not in df.columns or "Crime_Count" not in df.columns:
+        raise ValueError(
+            "NCRB data must include State, Year, and Crime_Count columns after normalization."
+        )
+
+    df["Year"] = pd.to_numeric(df["Year"], errors="coerce")
+    df["Crime_Count"] = pd.to_numeric(df["Crime_Count"], errors="coerce").fillna(0)
+    df = df.dropna(subset=["State", "Year"]).copy()
+    df["State"] = df["State"].astype(str).str.title()
+    df["Year"] = df["Year"].astype(int)
+
+    df_state = df.groupby(["State", "Year"], as_index=False)["Crime_Count"].sum()
+    df_state["Month"] = 1
+    df_state["Date"] = pd.to_datetime(df_state["Year"].astype(str) + "-01-01", errors="coerce")
+    df_state["City"] = df_state["State"]
+
+    df_state = df_state.sort_values(["City", "Year"]).reset_index(drop=True)
+    df_state["Lag1"] = df_state.groupby("City")["Crime_Count"].shift(1).fillna(0)
+    df_state["Lag2"] = df_state.groupby("City")["Crime_Count"].shift(2).fillna(0)
+    df_state["Lag3"] = df_state.groupby("City")["Crime_Count"].shift(3).fillna(0)
+    df_state["TrendIndex"] = df_state.groupby("City").cumcount() + 1
+    df_state["Month_sin"] = np.sin(2 * np.pi * df_state["Month"] / 12)
+    df_state["Month_cos"] = np.cos(2 * np.pi * df_state["Month"] / 12)
+
+    return df_state[["City", "Date", "Year", "Month", "Crime_Count", "Lag1", "Lag2", "Lag3", "TrendIndex", "Month_sin", "Month_cos"]]
+
+
+def resolve_city_column(df):
+    for col in ["City", "city", "CITY", "CityName"]:
+        if col in df.columns:
+            return col
+    return None
+
+
+def prepare_city_prediction_data(df, encoders=None):
+    panel_df = df.copy()
+    city_col = resolve_city_column(panel_df)
+
+    if city_col is None and "City_enc" in panel_df.columns:
+        le = (encoders or {}).get("City")
+        if le is not None:
+            panel_df["City"] = le.inverse_transform(panel_df["City_enc"].astype(int))
+        else:
+            panel_df["City"] = panel_df["City_enc"].astype(str)
+        city_col = "City"
+
+    if city_col is None:
+        raise KeyError("No city column found for prediction.")
+
+    panel_df["City"] = panel_df[city_col].astype(str)
+    panel_df["Year"] = pd.to_numeric(panel_df["Year"], errors="coerce")
+    panel_df["Month"] = pd.to_numeric(panel_df["Month"], errors="coerce")
+    panel_df["Crime_Count"] = pd.to_numeric(panel_df["Crime_Count"], errors="coerce")
+    panel_df = panel_df.dropna(subset=["City", "Year", "Month", "Crime_Count"]).copy()
+
+    encoder = LabelEncoder()
+    panel_df["City_Encoded"] = encoder.fit_transform(panel_df["City"])
+
+    features = panel_df[["City_Encoded", "Month", "Year"]]
+    target = panel_df["Crime_Count"]
+
+    model = RandomForestRegressor(
+        n_estimators=200,
+        random_state=42,
+        min_samples_leaf=1
+    )
+    model.fit(features, target)
+
+    return panel_df, encoder, model
+
+
+def get_city_prediction_assets(df, encoders=None):
+    fingerprint = str(pd.util.hash_pandas_object(df, index=True).sum())
+    cached = st.session_state.get("city_prediction_assets")
+
+    if cached and cached.get("fingerprint") == fingerprint:
+        return cached["panel_df"], cached["encoder"], cached["model"]
+
+    panel_df, encoder, model = prepare_city_prediction_data(df, encoders)
+    st.session_state["city_prediction_assets"] = {
+        "fingerprint": fingerprint,
+        "panel_df": panel_df,
+        "encoder": encoder,
+        "model": model
+    }
+    return panel_df, encoder, model
+
+
+def risk_level(pred):
+    if pred < 50:
+        return "Low Risk 🟢"
+    if pred < 120:
+        return "Medium Risk 🟠"
+    return "High Risk 🔴"
+
 
 # ---------------------------------------------
 # IMPORT PROJECT MODULES
@@ -76,6 +201,11 @@ forecast_horizon = st.sidebar.slider("Forecast Steps (Months)", 1, 12, 3)
 epochs = st.sidebar.slider("Training Epochs", 10, 200, 60)
 window = st.sidebar.slider("LSTM Window", 1, 12, 3)
 
+ncrb_url = st.sidebar.text_input("NCRB dataset URL", DEFAULT_NCRB_URL)
+auto_load_ncrb = st.sidebar.checkbox("Auto-load latest NCRB crime data", True)
+if st.sidebar.button("Load latest NCRB data now"):
+    st.session_state["load_ncrb_now"] = True
+
 use_google_maps = st.sidebar.checkbox("Use Google Maps Tiles", True)
 
 GOOGLE_API_KEY = os.environ.get("GOOGLE_MAPS_API_KEY", None)
@@ -90,6 +220,7 @@ except:
 # ---------------------------------------------
 df_monthly = None
 encoders = {}
+load_ncrb_now = st.session_state.get("load_ncrb_now", False)
 
 if uploaded:
     try:
@@ -98,15 +229,28 @@ if uploaded:
     except Exception as e:
         st.error("Failed to load dataset:")
         st.error(str(e))
-
 else:
-    # fallback if no upload
-    if os.path.exists("data/time_series_city.csv"):
+    loaded_ncrb = False
+    if auto_load_ncrb or load_ncrb_now:
+        try:
+            df_monthly = load_ncrb_data(ncrb_url)
+            loaded_ncrb = True
+            st.success("Loaded latest NCRB crime data automatically 🎉")
+            st.info("State-level crime data from the NCRB portal is now available for forecasting and hotspot mapping.")
+        except Exception as exc:
+            if load_ncrb_now:
+                st.error("Failed to download NCRB dataset:")
+                st.error(str(exc))
+            else:
+                st.warning("Automatic NCRB dataset download failed. Falling back to local dataset if available.")
+                st.info(str(exc))
+
+    if not loaded_ncrb and os.path.exists("data/time_series_city.csv"):
         df_monthly = pd.read_csv("data/time_series_city.csv")
         st.info("Loaded default prepared dataset.")
-    else:
-        st.warning("Upload a dataset to start.")
-        df_monthly = None
+
+    if df_monthly is None:
+        st.warning("Upload a dataset or load NCRB data to start.")
 
 
 # ---------------------------------------------
@@ -223,6 +367,61 @@ with tabs[0]:
 
             st.write("Recent rows:")
             st.dataframe(df_city.tail(10))
+
+            st.subheader("🔮 City Crime Risk Prediction")
+            try:
+                panel_df, city_encoder, city_risk_model = get_city_prediction_assets(df_monthly, encoders)
+                available_cities = sorted(panel_df["City"].dropna().unique())
+
+                default_city_index = available_cities.index(city_choice) if city_choice in available_cities else 0
+                selected_panel_city = st.selectbox(
+                    "Select City",
+                    available_cities,
+                    index=default_city_index,
+                    key="city_risk_panel_city"
+                )
+                selected_month = st.slider("Select Month", 1, 12, 1, key="city_risk_panel_month")
+                selected_year = st.number_input(
+                    "Select Year",
+                    min_value=2020,
+                    max_value=2035,
+                    value=2025,
+                    step=1,
+                    key="city_risk_panel_year"
+                )
+
+                if st.button("Predict Crime Risk", key="predict_city_risk"):
+                    city_encoded = city_encoder.transform([selected_panel_city])[0]
+                    input_data = pd.DataFrame(
+                        [[city_encoded, selected_month, int(selected_year)]],
+                        columns=["City_Encoded", "Month", "Year"]
+                    )
+                    prediction = city_risk_model.predict(input_data)
+                    predicted_crimes = max(float(prediction[0]), 0.0)
+                    risk = risk_level(predicted_crimes)
+
+                    st.metric("Predicted Crimes", int(round(predicted_crimes)))
+                    st.success(f"Crime Risk Level: {risk}")
+
+                    gauge_max = max(200, int(panel_df["Crime_Count"].max() * 1.2) if not panel_df.empty else 200)
+                    fig = go.Figure(go.Indicator(
+                        mode="gauge+number",
+                        value=predicted_crimes,
+                        title={"text": "Crime Risk Index"},
+                        gauge={
+                            "axis": {"range": [0, gauge_max]},
+                            "steps": [
+                                {"range": [0, min(50, gauge_max)], "color": "green"},
+                                {"range": [min(50, gauge_max), min(120, gauge_max)], "color": "orange"},
+                                {"range": [min(120, gauge_max), gauge_max], "color": "red"}
+                            ]
+                        }
+                    ))
+                    fig.update_layout(template="plotly_dark", height=320, margin=dict(l=20, r=20, t=60, b=20))
+                    st.plotly_chart(fig, use_container_width=True)
+            except Exception as exc:
+                st.warning("City risk prediction panel is unavailable for the current dataset.")
+                st.caption(str(exc))
 
             # ---------------------------------------------
             # Train & Forecast
