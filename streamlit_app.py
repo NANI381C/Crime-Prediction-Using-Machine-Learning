@@ -157,7 +157,13 @@ with tabs[0]:
         # FIX: Load City Mapping (Encoded → Name)
         # ---------------------------------------------
         city_map_path = os.path.join(ROOT_DIR, "models", "city_mapping.csv")
-
+        alt_city_map_path = os.path.join(ROOT_DIR, "city_mapping.csv")
+        if os.path.exists(city_map_path):
+            mapping_path = city_map_path
+        elif os.path.exists(alt_city_map_path):
+            mapping_path = alt_city_map_path
+        else:
+            mapping_path = None
 
         city_col = None
         for col in ["City", "city", "CITY", "City_enc"]:
@@ -172,9 +178,9 @@ with tabs[0]:
             # ---------------------------------------------
             # If mapping exists, convert numbers to names
             # ---------------------------------------------
-            if os.path.exists(city_map_path):
+            if mapping_path is not None:
                 st.success("City mapping loaded successfully ✔")
-                mapping = pd.read_csv(city_map_path)
+                mapping = pd.read_csv(mapping_path)
                 mapping = mapping.rename(columns={
                     mapping.columns[0]: "CityName",
                     mapping.columns[1]: "CityCode"
@@ -209,7 +215,7 @@ with tabs[0]:
             # ---------------------------------------------
             # Convert chosen name → encoded for processing
             # ---------------------------------------------
-            if os.path.exists(city_map_path):
+            if mapping_path is not None:
                 selected_code = int(mapping[mapping["CityName"] == city_choice]["CityCode"].values[0])
                 df_city = df_monthly[df_monthly["CityCode"] == selected_code].sort_values("Date")
             else:
