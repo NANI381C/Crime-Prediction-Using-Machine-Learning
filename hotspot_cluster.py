@@ -66,6 +66,9 @@ def _extract_location_names(df_monthly, encoders):
             df_mean['City'] = le.inverse_transform(df_mean['City_enc'].astype(int))
         else:
             df_mean['City'] = df_mean['City_enc'].astype(str)
+    elif 'CityName' in df_monthly.columns:
+        df_mean = df_monthly.groupby('CityName')['Crime_Count'].mean().reset_index()
+        df_mean = df_mean.rename(columns={'CityName': 'City'})
     elif 'City' in df_monthly.columns:
         df_mean = df_monthly.groupby('City')['Crime_Count'].mean().reset_index()
     else:

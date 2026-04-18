@@ -4,6 +4,7 @@ import os
 ROOT_DIR = os.path.dirname(os.path.abspath(__file__))
 
 import streamlit as st
+import streamlit.components.v1 as components
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
@@ -135,6 +136,15 @@ def risk_level(pred):
     if pred < 120:
         return "Medium Risk 🟠"
     return "High Risk 🔴"
+
+
+def render_local_html(path, height=620):
+    if not os.path.exists(path):
+        st.error(f"Map file not found: {path}")
+        return
+
+    with open(path, "r", encoding="utf-8") as html_file:
+        components.html(html_file.read(), height=height)
 
 
 # ---------------------------------------------
@@ -310,7 +320,7 @@ with tabs[0]:
             mapping_path = None
 
         city_col = None
-        for col in ["City", "city", "CITY", "City_enc"]:
+        for col in ["City", "CityName", "city", "CITY", "City_enc"]:
             if col in df_monthly.columns:
                 city_col = col
                 break
@@ -331,7 +341,7 @@ with tabs[0]:
                 })
 
                 # If df contains encoded numbers like 0,1,2...
-                if df_monthly[city_col].dtype != object:
+                if city_col == "City_enc" or pd.api.types.is_numeric_dtype(df_monthly[city_col]):
 
                     # merge encoded → city name
                     df_monthly = df_monthly.merge(
@@ -347,7 +357,7 @@ with tabs[0]:
                     city_display_col = city_col
 
             else:
-                st.error("City mapping file missing: models/city_mapping.csv")
+                st.info("City mapping file not found. Using city values directly from the dataset.")
                 city_display_col = city_col
 
             # ---------------------------------------------
@@ -359,9 +369,14 @@ with tabs[0]:
             # ---------------------------------------------
             # Convert chosen name → encoded for processing
             # ---------------------------------------------
-            if mapping_path is not None:
-                selected_code = int(mapping[mapping["CityName"] == city_choice]["CityCode"].values[0])
-                df_city = df_monthly[df_monthly["CityCode"] == selected_code].sort_values("Date")
+            if mapping_path is not None and "CityCode" in df_monthly.columns:
+                city_match = mapping[mapping["CityName"] == city_choice]["CityCode"]
+                if city_match.empty:
+                    st.error("Unable to match the selected city to its encoded value.")
+                    df_city = pd.DataFrame()
+                else:
+                    selected_code = int(city_match.values[0])
+                    df_city = df_monthly[df_monthly["CityCode"] == selected_code].sort_values("Date")
             else:
                 df_city = df_monthly[df_monthly[city_display_col] == city_choice].sort_values("Date")
 
@@ -427,94 +442,94 @@ with tabs[0]:
             # Train & Forecast
             # ---------------------------------------------
             if st.button("🚀 Train & Forecast"):
-                with st.spinner("Training LSTM..."):
-                    model, scaler_X, scaler_y, metrics, future_preds = train_and_forecast(
-                        df_city,
-                        window=window,
-                        epochs=epochs,
-                        forecast_steps=forecast_horizon
+                if df_city.empty:
+                    st.error("No city data is available for the selected city.")
+                else:
+                    with st.spinner("Training LSTM..."):
+                        model, scaler_X, scaler_y, metrics, future_preds = train_and_forecast(
+                            df_city,
+                            window=window,
+                            epochs=epochs,
+                            forecast_steps=forecast_horizon
+                        )
+
+                    st.success("Training complete!")
+
+                    accuracy = 100 - metrics["mape"]
+
+                    c1, c2, c3, c4 = st.columns(4)
+                    c1.metric("Accuracy", f"{accuracy:.2f}%")
+                    c2.metric("MAPE", f"{metrics['mape']:.2f}%")
+                    c3.metric("RMSE", f"{metrics['rmse']:.2f}")
+                    c4.metric("MAE", f"{metrics['mae']:.2f}")
+
+                    actual_df = pd.DataFrame({
+                        "Date": df_city["Date"].iloc[-len(metrics["test_true"]):].reset_index(drop=True),
+                        "Actual": metrics["test_true"],
+                        "Predicted": metrics["test_pred"]
+                    })
+                    fig_history = px.line(
+                        actual_df,
+                        x="Date",
+                        y=["Actual", "Predicted"],
+                        title="Recent Actual vs Predicted",
+                        labels={"value": "Crime Count", "variable": "Series"}
+                    )
+                    fig_history.update_layout(template="plotly_dark")
+                    st.plotly_chart(fig_history, use_container_width=True)
+
+                    st.subheader("🔮 Future Forecast")
+                    last_date = df_city["Date"].max() if "Date" in df_city.columns else None
+                    if last_date is not None and not pd.isna(last_date):
+                        future_dates = [last_date + pd.DateOffset(months=i + 1) for i in range(len(future_preds))]
+                    else:
+                        future_dates = [f"Month +{i + 1}" for i in range(len(future_preds))]
+
+                    forecast_df = pd.DataFrame({
+                        "Period": future_dates,
+                        "Predicted_Crimes": [float(p) for p in future_preds]
+                    })
+
+                    fig_forecast = px.area(
+                        forecast_df,
+                        x="Period",
+                        y="Predicted_Crimes",
+                        title="Crime Forecast Trend",
+                        markers=True
+                    )
+                    fig_forecast.update_layout(
+                        xaxis_title="Period",
+                        yaxis_title="Predicted Crime Count",
+                        template="plotly_dark"
+                    )
+                    st.plotly_chart(fig_forecast, use_container_width=True)
+
+                    avg_pred = forecast_df["Predicted_Crimes"].mean()
+                    max_row = forecast_df.loc[forecast_df["Predicted_Crimes"].idxmax()]
+                    max_period = max_row["Period"]
+                    max_period_str = max_period.strftime("%b %Y") if isinstance(max_period, pd.Timestamp) else str(max_period)
+                    trend = "increasing" if forecast_df["Predicted_Crimes"].iloc[-1] > forecast_df["Predicted_Crimes"].iloc[0] else "decreasing"
+
+                    st.subheader("🧠 AI Insights")
+                    st.info(
+                        f"🔎 AI Analysis\n\n"
+                        f"• Average predicted crimes: {avg_pred:.1f}\n"
+                        f"• Highest crime expected in: {max_period_str}\n"
+                        f"• Trend: {trend.title()}\n\n"
+                        "Recommendation: Increase surveillance during high-risk months."
                     )
 
-                st.success("Training complete!")
+                    st.markdown("#### Forecast Details")
+                    st.dataframe(forecast_df)
 
-                accuracy = 100 - metrics["mape"]
+                    os.makedirs("models", exist_ok=True)
+                    try:
+                        model.save("models/crime_lstm_model.keras")
+                    except Exception:
+                        joblib.dump(model, "models/crime_lstm_model.joblib")
 
-                c1, c2, c3, c4 = st.columns(4)
-                c1.metric("Accuracy", f"{accuracy:.2f}%")
-                c2.metric("MAPE", f"{metrics['mape']:.2f}%")
-                c3.metric("RMSE", f"{metrics['rmse']:.2f}")
-                c4.metric("MAE", f"{metrics['mae']:.2f}")
-
-                # Recent performance chart
-                actual_df = pd.DataFrame({
-                    "Date": df_city["Date"].iloc[-len(metrics["test_true"]):].reset_index(drop=True),
-                    "Actual": metrics["test_true"],
-                    "Predicted": metrics["test_pred"]
-                })
-                fig_history = px.line(
-                    actual_df,
-                    x="Date",
-                    y=["Actual", "Predicted"],
-                    title="Recent Actual vs Predicted",
-                    labels={"value": "Crime Count", "variable": "Series"}
-                )
-                fig_history.update_layout(template="plotly_dark")
-                st.plotly_chart(fig_history, use_container_width=True)
-
-                # Forecast chart
-                st.subheader("🔮 Future Forecast")
-                last_date = df_city["Date"].max() if "Date" in df_city.columns else None
-                if last_date is not None and not pd.isna(last_date):
-                    future_dates = [last_date + pd.DateOffset(months=i+1) for i in range(len(future_preds))]
-                else:
-                    future_dates = [f"Month +{i+1}" for i in range(len(future_preds))]
-
-                forecast_df = pd.DataFrame({
-                    "Period": future_dates,
-                    "Predicted_Crimes": [float(p) for p in future_preds]
-                })
-
-                fig_forecast = px.area(
-                    forecast_df,
-                    x="Period",
-                    y="Predicted_Crimes",
-                    title="Crime Forecast Trend",
-                    markers=True
-                )
-                fig_forecast.update_layout(
-                    xaxis_title="Period",
-                    yaxis_title="Predicted Crime Count",
-                    template="plotly_dark"
-                )
-                st.plotly_chart(fig_forecast, use_container_width=True)
-
-                avg_pred = forecast_df["Predicted_Crimes"].mean()
-                max_row = forecast_df.loc[forecast_df["Predicted_Crimes"].idxmax()]
-                max_period = max_row["Period"]
-                max_period_str = max_period.strftime("%b %Y") if isinstance(max_period, pd.Timestamp) else str(max_period)
-                trend = "increasing" if forecast_df["Predicted_Crimes"].iloc[-1] > forecast_df["Predicted_Crimes"].iloc[0] else "decreasing"
-
-                st.subheader("🧠 AI Insights")
-                st.info(
-                    f"🔎 AI Analysis\n\n"
-                    f"• Average predicted crimes: {avg_pred:.1f}\n"
-                    f"• Highest crime expected in: {max_period_str}\n"
-                    f"• Trend: {trend.title()}\n\n"
-                    "Recommendation: Increase surveillance during high-risk months."
-                )
-
-                st.markdown("#### Forecast Details")
-                st.dataframe(forecast_df)
-
-                # Save model
-                os.makedirs("models", exist_ok=True)
-                try:
-                    model.save("models/crime_lstm_model.keras")
-                except Exception:
-                    joblib.dump(model, "models/crime_lstm_model.joblib")
-
-                joblib.dump(scaler_X, "models/scaler_X.joblib")
-                joblib.dump(scaler_y, "models/scaler_y.joblib")
+                    joblib.dump(scaler_X, "models/scaler_X.joblib")
+                    joblib.dump(scaler_y, "models/scaler_y.joblib")
 
     st.markdown("</div>", unsafe_allow_html=True)
 
@@ -559,7 +574,7 @@ with tabs[1]:
 
                     map_col, rank_col = st.columns([2, 1])
                     with map_col:
-                        st.iframe("map.html", height=620)
+                        render_local_html("map.html", height=620)
                     with rank_col:
                         st.subheader("Top 10 Crime Hotspots")
                         st.bar_chart(top_cities)
@@ -572,7 +587,7 @@ with tabs[1]:
                     st.error("Unable to generate live risk map. No valid city locations found.")
                 else:
                     risk_map.save("risk_map.html")
-                    st.iframe("risk_map.html", height=620)
+                    render_local_html("risk_map.html", height=620)
                     st.markdown(
                         "### Risk Level Guide\n\n"
                         "🟢 Low Risk  \n"
@@ -617,11 +632,16 @@ with tabs[3]:
             raw = pd.read_csv(uploaded)
 
             with st.spinner("Training..."):
-                metrics = train_classifier(raw)
+                try:
+                    metrics = train_classifier(raw)
+                except Exception as exc:
+                    metrics = None
+                    st.error(f"Classifier training failed: {exc}")
 
-            st.success("Classifier Trained!")
-            st.write(metrics["accuracy"])
-            st.json(metrics["report"])
+            if metrics is not None:
+                st.success("Classifier Trained!")
+                st.write(metrics["accuracy"])
+                st.json(metrics["report"])
 
     st.markdown("</div>", unsafe_allow_html=True)
 
@@ -672,7 +692,7 @@ with tabs[5]:
                                    auto_play=True).add_to(m)
 
                 m.save("animated_map.html")
-                st.iframe("animated_map.html", height=650)
+                render_local_html("animated_map.html", height=650)
 
     st.markdown("</div>", unsafe_allow_html=True)
 

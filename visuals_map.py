@@ -8,7 +8,7 @@ from folium.plugins import TimestampedGeoJson
 # ------------------------------------------------------------
 # FIX: Always save cache inside project-level /data folder
 # ------------------------------------------------------------
-BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+BASE_DIR = os.path.abspath(os.path.dirname(__file__))
 DATA_DIR = os.path.join(BASE_DIR, "data")
 
 os.makedirs(DATA_DIR, exist_ok=True)
@@ -39,20 +39,21 @@ def build_city_geo_df(df_monthly, encoders):
     Always returns: City, lat, lon
     """
 
-    city_col = detect_city_column(df_monthly)
+    df_work = df_monthly.copy()
+    city_col = detect_city_column(df_work)
 
     # If encoded → convert using LabelEncoder
     if city_col == "City_enc":
         if "City" in encoders:
             le = encoders["City"]
-            df_monthly["City"] = le.inverse_transform(df_monthly["City_enc"].astype(int))
+            df_work["City"] = le.inverse_transform(df_work["City_enc"].astype(int))
             city_col = "City"
         else:
             raise KeyError("City_enc found but no encoder available to decode city names.")
 
     # If CityName → rename to City
     if city_col == "CityName":
-        df_monthly["City"] = df_monthly["CityName"]
+        df_work["City"] = df_work["CityName"]
         city_col = "City"
 
     # Static coordinates for Indian cities
@@ -90,7 +91,7 @@ def build_city_geo_df(df_monthly, encoders):
 
     geo_data = []
 
-    for _, row in df_monthly.iterrows():
+    for _, row in df_work.iterrows():
         city = row[city_col]
 
         if city in city_coords:
@@ -117,18 +118,19 @@ def create_timestamped_geojson(df_monthly, geo_df):
     """
 
     # Detect city column
-    city_col = detect_city_column(df_monthly)
+    df_work = df_monthly.copy()
+    city_col = detect_city_column(df_work)
 
     # Normalize column name
     if city_col in ["CityName"]:
-        df_monthly["City"] = df_monthly["CityName"]
+        df_work["City"] = df_work["CityName"]
     elif city_col == "City_enc":
-        df_monthly["City"] = df_monthly["City_enc"].astype(int)
+        df_work["City"] = df_work["City_enc"].astype(int)
     else:
-        df_monthly["City"] = df_monthly[city_col]
+        df_work["City"] = df_work[city_col]
 
     # Merge with coordinates
-    merged = df_monthly.merge(geo_df, on="City", how="left")
+    merged = df_work.merge(geo_df, on="City", how="left")
 
     # Fix date column
     merged["Date"] = pd.to_datetime(merged["Date"], errors="coerce")
