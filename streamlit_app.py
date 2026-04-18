@@ -10,7 +10,6 @@ import matplotlib.pyplot as plt
 import joblib
 import folium
 from folium.plugins import TimestampedGeoJson
-from streamlit.components.v1 import html
 
 # ---------------------------------------------
 # IMPORT PROJECT MODULES
@@ -299,7 +298,7 @@ with tabs[1]:
                         m.add_child(folium.LayerControl())
 
                     m.save("map.html")
-                    html(open("map.html").read(), height=600)
+                    st.iframe("map.html", height=600)
 
     st.markdown("</div>", unsafe_allow_html=True)
 
@@ -393,7 +392,7 @@ with tabs[5]:
                                    auto_play=True).add_to(m)
 
                 m.save("animated_map.html")
-                html(open("animated_map.html").read(), height=650)
+                st.iframe("animated_map.html", height=650)
 
     st.markdown("</div>", unsafe_allow_html=True)
 
