@@ -43,3 +43,4 @@ streamlit run app.py
 
 👤 Author
 Simham Nagasai - GitHub Profile
+[![Architecture diagram of nani381c/crime-prediction-using-machine-learning](https://gitdiagram.com/nani381c/crime-prediction-using-machine-learning/diagram.png)](https://gitdiagram.com/nani381c/crime-prediction-using-machine-learning?utm_source=readme&utm_medium=picture)
