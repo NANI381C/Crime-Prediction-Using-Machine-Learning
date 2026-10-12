@@ -1,4 +1,4 @@
-# 🚨 Crime Forecasting & Hotspot Visualization Dashboard
+# 🚨 Crime prediction using machine learning
 
 An interactive, data-driven web application built with **Streamlit** to analyze, forecast, and visualize crime patterns across India. 
 
